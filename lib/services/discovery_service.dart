@@ -248,6 +248,39 @@ class DiscoveryService {
     );
   }
 
+  void rememberPeer({
+    required String name,
+    required String ip,
+    required int textPort,
+    required int filePort,
+  }) {
+    String? matchedKey;
+
+    for (final entry in _devices.entries) {
+      if (entry.value.ip == ip) {
+        matchedKey = entry.key;
+        break;
+      }
+    }
+
+    final key = matchedKey ?? 'peer-$ip-$textPort-$filePort';
+    final old = _devices[key];
+
+    _devices[key] = Device(
+      id: key,
+      name: name,
+      ip: ip,
+      textPort: textPort,
+      filePort: filePort,
+      isManual: old?.isManual ?? true,
+      selected: old?.selected ?? false,
+      online: true,
+      lastSeen: DateTime.now(),
+    );
+
+    _emitDevices();
+  }
+
   void removeDevice(String deviceId) {
     final removed = _devices.remove(deviceId);
     if (removed != null) {

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:archive/archive.dart';
 import 'package:archive/archive_io.dart';
 
 import '../models/device.dart';
@@ -15,6 +14,8 @@ class ReceivedFileRecord {
   final int size;
   final String fromDeviceName;
   final String fromIp;
+  final int fromTextPort;
+  final int fromFilePort;
   final DateTime time;
 
   ReceivedFileRecord({
@@ -23,6 +24,8 @@ class ReceivedFileRecord {
     required this.size,
     required this.fromDeviceName,
     required this.fromIp,
+    required this.fromTextPort,
+    required this.fromFilePort,
     required this.time,
   });
 }
@@ -33,6 +36,8 @@ class ReceivedFolderRecord {
   final int zipSize;
   final String fromDeviceName;
   final String fromIp;
+  final int fromTextPort;
+  final int fromFilePort;
   final DateTime time;
 
   ReceivedFolderRecord({
@@ -41,6 +46,8 @@ class ReceivedFolderRecord {
     required this.zipSize,
     required this.fromDeviceName,
     required this.fromIp,
+    required this.fromTextPort,
+    required this.fromFilePort,
     required this.time,
   });
 }
@@ -64,6 +71,10 @@ class FileTransferService {
       _receivedFolderController.stream;
 
   FileTransferService({required this.selfName});
+
+  Future<void> _trace(String message) async {
+    await LogService.instance.info('[folder-trace] $message');
+  }
 
   Future<void> startReceiver() async {
     _serverSocket = await ServerSocket.bind(
@@ -91,6 +102,8 @@ class FileTransferService {
     String folderName = 'unknown_folder';
     String fromName = 'Unknown_Device';
     String fromIp = socket.remoteAddress.address;
+    int fromTextPort = 40402;
+    int fromFilePort = 40403;
     int expectedSize = 0;
     int receivedSize = 0;
 
@@ -111,7 +124,13 @@ class FileTransferService {
           packetType = header['type'] as String? ?? '';
           fromName = header['fromName'] as String? ?? 'Unknown_Device';
           fromIp = header['fromIp'] as String? ?? socket.remoteAddress.address;
+          fromTextPort = header['fromTextPort'] as int? ?? 40402;
+          fromFilePort = header['fromFilePort'] as int? ?? 40403;
           expectedSize = header['fileSize'] as int? ?? 0;
+
+          await _trace(
+            'header received type=$packetType from=$fromName ip=$fromIp textPort=$fromTextPort filePort=$fromFilePort expectedSize=$expectedSize',
+          );
 
           if (packetType == 'file_transfer') {
             fileName = header['fileName'] as String? ?? 'unknown.bin';
@@ -127,21 +146,19 @@ class FileTransferService {
             );
             outputFile = await _uniqueFile(outputFile);
             sink = outputFile.openWrite();
+
+            await _trace('prepare receive file path=${outputFile.path}');
           } else if (packetType == 'folder_transfer') {
             folderName = header['folderName'] as String? ?? 'unknown_folder';
 
-            final saveDir = await SaveLocationService.instance
-                .ensureSenderCategoryDirectory(
-                  senderName: fromName,
-                  category: 'Folders',
-                );
-
-            final tempZip = File(
-              '${saveDir.path}${Platform.pathSeparator}${folderName}_temp.zip',
+            final tempZip = await SaveLocationService.instance.createTempCacheFile(
+              '${folderName}_${DateTime.now().millisecondsSinceEpoch}_recv.zip',
             );
 
             outputFile = await _uniqueFile(tempZip);
             sink = outputFile.openWrite();
+
+            await _trace('prepare cache zip file=${outputFile.path}');
           } else {
             throw Exception('Unsupported packet type: $packetType');
           }
@@ -162,6 +179,10 @@ class FileTransferService {
       await sink?.flush();
       await sink?.close();
 
+      await _trace(
+        'stream write finished type=$packetType actualBytes=$receivedSize',
+      );
+
       if (packetType == 'file_transfer' && outputFile != null) {
         final record = ReceivedFileRecord(
           fileName: outputFile.uri.pathSegments.last,
@@ -169,6 +190,8 @@ class FileTransferService {
           size: receivedSize,
           fromDeviceName: fromName,
           fromIp: fromIp,
+          fromTextPort: fromTextPort,
+          fromFilePort: fromFilePort,
           time: DateTime.now(),
         );
 
@@ -180,23 +203,65 @@ class FileTransferService {
       }
 
       if (packetType == 'folder_transfer' && outputFile != null) {
-        final folderDir = await SaveLocationService.instance
+        final folderParentDir = await SaveLocationService.instance
             .ensureSenderCategoryDirectory(
               senderName: fromName,
               category: 'Folders',
             );
 
-        final finalFolder = await _uniqueDirectory(
-          Directory('${folderDir.path}${Platform.pathSeparator}$folderName'),
+        await _trace('folder packet received from=$fromName ip=$fromIp');
+        await _trace('cached zip path=${outputFile.path}');
+        await _trace('target parent dir=${folderParentDir.path}');
+        await _trace(
+          'start unzip folderName=$folderName expectedZipBytes=$expectedSize actualZipBytes=$receivedSize',
         );
-        await finalFolder.create(recursive: true);
 
-        await _extractZipToDirectory(
-          zipFile: outputFile,
-          targetDir: finalFolder,
+        final beforeDirs = folderParentDir
+            .listSync()
+            .whereType<Directory>()
+            .map((e) => e.path)
+            .toSet();
+
+        extractFileToDisk(outputFile.path, folderParentDir.path);
+
+        await _trace('extractFileToDisk finished');
+
+        final afterDirs = folderParentDir
+            .listSync()
+            .whereType<Directory>()
+            .toList();
+
+        Directory? finalFolder;
+
+        for (final dir in afterDirs) {
+          await _trace('after unzip dir=${dir.path}');
+          if (!beforeDirs.contains(dir.path)) {
+            finalFolder = dir;
+            break;
+          }
+        }
+
+        final expectedFolder = Directory(
+          '${folderParentDir.path}${Platform.pathSeparator}$folderName',
         );
+
+        if (finalFolder == null && await expectedFolder.exists()) {
+          finalFolder = expectedFolder;
+        }
+
+        if (finalFolder == null) {
+          await _trace(
+            'no new folder detected after unzip, parent=${folderParentDir.path}',
+          );
+          throw Exception(
+            'Folder extracted but target directory not found: $folderName',
+          );
+        }
+
+        await _trace('final extracted folder=${finalFolder.path}');
 
         if (await outputFile.exists()) {
+          await _trace('delete cache zip=${outputFile.path}');
           await outputFile.delete();
         }
 
@@ -208,6 +273,8 @@ class FileTransferService {
           zipSize: receivedSize,
           fromDeviceName: fromName,
           fromIp: fromIp,
+          fromTextPort: fromTextPort,
+          fromFilePort: fromFilePort,
           time: DateTime.now(),
         );
 
@@ -227,46 +294,6 @@ class FileTransferService {
     }
   }
 
-  Future<void> _extractZipToDirectory({
-    required File zipFile,
-    required Directory targetDir,
-  }) async {
-    final input = InputFileStream(zipFile.path);
-    final archive = ZipDecoder().decodeStream(input);
-    input.close();
-
-    for (final entry in archive) {
-      final rawName = entry.name.replaceAll('\\', '/');
-
-      if (rawName.isEmpty) {
-        continue;
-      }
-
-      String relativeName = rawName;
-
-      final firstSlash = rawName.indexOf('/');
-      if (firstSlash != -1) {
-        relativeName = rawName.substring(firstSlash + 1);
-      }
-
-      if (relativeName.isEmpty) {
-        continue;
-      }
-
-      final outPath =
-          '${targetDir.path}${Platform.pathSeparator}${relativeName.replaceAll('/', Platform.pathSeparator)}';
-
-      if (entry.isFile) {
-        final outFile = File(outPath);
-        await outFile.parent.create(recursive: true);
-        await outFile.writeAsBytes(entry.content as List<int>, flush: true);
-      } else {
-        final outDir = Directory(outPath);
-        await outDir.create(recursive: true);
-      }
-    }
-  }
-
   Future<File> _uniqueFile(File file) async {
     if (!await file.exists()) {
       return file;
@@ -282,22 +309,6 @@ class FileTransferService {
     int i = 1;
     while (true) {
       final candidate = File('$namePart ($i)$extPart');
-      if (!await candidate.exists()) {
-        return candidate;
-      }
-      i++;
-    }
-  }
-
-  Future<Directory> _uniqueDirectory(Directory dir) async {
-    if (!await dir.exists()) {
-      return dir;
-    }
-
-    final path = dir.path;
-    int i = 1;
-    while (true) {
-      final candidate = Directory('$path ($i)');
       if (!await candidate.exists()) {
         return candidate;
       }
@@ -328,8 +339,14 @@ class FileTransferService {
           'fileSize': fileSize,
           'fromName': fromName,
           'fromIp': fromIp,
+          'fromTextPort': 40402,
+          'fromFilePort': 40403,
           'time': DateTime.now().toIso8601String(),
         };
+
+        await _trace(
+          'send file start target=${device.name} ${device.ip}:${device.filePort} file=$fileName size=$fileSize',
+        );
 
         socket.add(utf8.encode('${jsonEncode(header)}\n'));
 
@@ -359,17 +376,20 @@ class FileTransferService {
   }) async {
     final folderName = folder.uri.pathSegments.where((e) => e.isNotEmpty).last;
 
-    final tempZipPath =
-        '${Directory.systemTemp.path}${Platform.pathSeparator}'
-        '${folderName}_${DateTime.now().millisecondsSinceEpoch}.zip';
+    final zipFile = await SaveLocationService.instance.createTempCacheFile(
+      '${folderName}_${DateTime.now().millisecondsSinceEpoch}.zip',
+    );
+
+    await _trace('start pack folder=${folder.path}');
+    await _trace('cache zip path=${zipFile.path}');
 
     final encoder = ZipFileEncoder();
-    encoder.create(tempZipPath);
+    encoder.create(zipFile.path);
     encoder.addDirectory(folder, includeDirName: true);
     encoder.close();
 
-    final zipFile = File(tempZipPath);
     final zipSize = await zipFile.length();
+    await _trace('pack finished zip=${zipFile.path} size=$zipSize');
 
     for (final device in devices) {
       try {
@@ -385,8 +405,14 @@ class FileTransferService {
           'fileSize': zipSize,
           'fromName': fromName,
           'fromIp': fromIp,
+          'fromTextPort': 40402,
+          'fromFilePort': 40403,
           'time': DateTime.now().toIso8601String(),
         };
+
+        await _trace(
+          'send folder start target=${device.name} ${device.ip}:${device.filePort} folder=$folderName zipSize=$zipSize',
+        );
 
         socket.add(utf8.encode('${jsonEncode(header)}\n'));
 
@@ -408,6 +434,7 @@ class FileTransferService {
     }
 
     if (await zipFile.exists()) {
+      await _trace('delete cache zip after send=${zipFile.path}');
       await zipFile.delete();
     }
   }

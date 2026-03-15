@@ -11,6 +11,8 @@ class ReceivedTextMessage {
   final String text;
   final String contentType;
   final bool preserveFormat;
+  final int fromTextPort;
+  final int fromFilePort;
   final DateTime time;
 
   ReceivedTextMessage({
@@ -19,6 +21,8 @@ class ReceivedTextMessage {
     required this.text,
     required this.contentType,
     required this.preserveFormat,
+    required this.fromTextPort,
+    required this.fromFilePort,
     required this.time,
   });
 }
@@ -44,7 +48,7 @@ class MessageService {
     );
 
     await LogService.instance.info(
-      'Message server started at port $messagePort',
+      'Message server started at ${_serverSocket?.address.address}:$messagePort',
     );
 
     _serverSocket!.listen((socket) {
@@ -69,6 +73,8 @@ class MessageService {
             final messageText = map['text'] as String? ?? '';
             final contentType = map['contentType'] as String? ?? 'text/plain';
             final preserveFormat = map['preserveFormat'] as bool? ?? true;
+            final fromTextPort = map['fromTextPort'] as int? ?? 40402;
+            final fromFilePort = map['fromFilePort'] as int? ?? 40403;
 
             final message = ReceivedTextMessage(
               fromDeviceName: fromName,
@@ -76,6 +82,8 @@ class MessageService {
               text: messageText,
               contentType: contentType,
               preserveFormat: preserveFormat,
+              fromTextPort: fromTextPort,
+              fromFilePort: fromFilePort,
               time: DateTime.now(),
             );
 
@@ -119,6 +127,8 @@ class MessageService {
           'type': 'text_message',
           'fromName': fromName,
           'fromIp': fromIp,
+          'fromTextPort': 40402,
+          'fromFilePort': 40403,
           'text': text,
           'contentType': contentType,
           'preserveFormat': preserveFormat,

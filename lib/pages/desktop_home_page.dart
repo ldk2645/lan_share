@@ -1,10 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-
 import '../models/device.dart';
 import '../models/transfer_task.dart';
 import '../services/connectivity_test_service.dart';
@@ -91,6 +89,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
 
     _messageSub = _messageService.messageStream.listen((message) {
+      _discoveryService.rememberPeer(
+        name: message.fromDeviceName,
+        ip: message.fromIp,
+        textPort: message.fromTextPort,
+        filePort: message.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
         _receivedMessages = <ReceivedTextMessage>[
@@ -101,6 +106,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
 
     _fileSub = _fileTransferService.receivedFileStream.listen((file) {
+      _discoveryService.rememberPeer(
+        name: file.fromDeviceName,
+        ip: file.fromIp,
+        textPort: file.fromTextPort,
+        filePort: file.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
         _receivedFiles = <ReceivedFileRecord>[file, ..._receivedFiles];
@@ -108,6 +120,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
 
     _folderSub = _fileTransferService.receivedFolderStream.listen((folder) {
+      _discoveryService.rememberPeer(
+        name: folder.fromDeviceName,
+        ip: folder.fromIp,
+        textPort: folder.fromTextPort,
+        filePort: folder.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
         _receivedFolders = <ReceivedFolderRecord>[folder, ..._receivedFolders];
@@ -234,6 +253,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: false,
       withData: false,
+      withReadStream: false,
+      lockParentWindow: true,
     );
 
     if (result == null || result.files.isEmpty) {
@@ -241,10 +262,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
       return;
     }
 
-    final picked = result.files.first;
-    final path = picked.path;
-
-    if (path == null || path.isEmpty) {
+    final path = result.files.first.path;
+    if (path == null || path.trim().isEmpty) {
       _showMessage('Cannot read picked file path');
       await LogService.instance.error('Picked file path is empty');
       return;
@@ -290,7 +309,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
       return;
     }
 
-    final folderPath = await FilePicker.platform.getDirectoryPath();
+    final folderPath = await FilePicker.platform.getDirectoryPath(
+      lockParentWindow: true,
+    );
+
     if (folderPath == null || folderPath.trim().isEmpty) {
       await LogService.instance.warn('Folder pick canceled by user');
       return;
@@ -437,7 +459,6 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
                     minLines: null,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      hintText: 'Edit text here...',
                     ),
                     style: const TextStyle(
                       fontFamily: 'monospace',
@@ -464,9 +485,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
                     ),
                     const Spacer(),
                     TextButton(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                      },
+                      onPressed: () => Navigator.of(context).pop(),
                       child: const Text('Close'),
                     ),
                     const SizedBox(width: 8),
@@ -493,10 +512,6 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
                         );
 
                         await file.writeAsString(controller.text, flush: true);
-
-                        await LogService.instance.info(
-                          'Edited text saved to ${file.path}',
-                        );
 
                         if (!mounted) return;
                         Navigator.of(context).pop();
@@ -536,6 +551,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
         ? '${Directory.current.path}${Platform.pathSeparator}Received'
         : (custom ?? 'Not selected');
 
+    final cachePath = '${Directory.current.path}${Platform.pathSeparator}Cache';
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -557,10 +574,14 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
             style: const TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 6),
-          SelectableText(
-            shownPath,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+          SelectableText(shownPath),
+          const SizedBox(height: 8),
+          const Text(
+            'Cache Folder',
+            style: TextStyle(fontSize: 13, color: Colors.grey),
           ),
+          const SizedBox(height: 4),
+          SelectableText(cachePath),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -591,13 +612,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
       itemBuilder: (context, index) {
         final msg = _receivedMessages[index];
         return Card(
-          elevation: 0,
-          color: Colors.white,
           margin: const EdgeInsets.only(bottom: 12),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFFE5E7EB)),
-          ),
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -685,21 +700,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
           const SizedBox(height: 8),
           ..._receivedFolders.map((folder) {
             return Card(
-              elevation: 0,
-              color: Colors.white,
               margin: const EdgeInsets.only(bottom: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Color(0xFFE5E7EB)),
-              ),
               child: ListTile(
                 leading: const Icon(Icons.folder),
                 title: Text(folder.folderName),
                 subtitle: SelectableText(
                   'From: ${folder.fromDeviceName} (${folder.fromIp})\n'
-                  'Zip size: ${folder.zipSize} bytes\n'
                   'Saved: ${folder.savedPath}',
-                  style: const TextStyle(height: 1.45),
                 ),
                 isThreeLine: true,
               ),
@@ -715,13 +722,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
           const SizedBox(height: 8),
           ..._receivedFiles.map((file) {
             return Card(
-              elevation: 0,
-              color: Colors.white,
               margin: const EdgeInsets.only(bottom: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Color(0xFFE5E7EB)),
-              ),
               child: ListTile(
                 leading: const Icon(Icons.insert_drive_file),
                 title: Text(file.fileName),
@@ -729,7 +730,6 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
                   'From: ${file.fromDeviceName} (${file.fromIp})\n'
                   'Size: ${file.size} bytes\n'
                   'Saved: ${file.savedPath}',
-                  style: const TextStyle(height: 1.45),
                 ),
                 isThreeLine: true,
               ),

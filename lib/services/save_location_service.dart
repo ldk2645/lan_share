@@ -57,6 +57,33 @@ class SaveLocationService {
     return dir;
   }
 
+  Future<Directory> getBaseCacheDirectory() async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      final dir = Directory(
+        '${Directory.current.path}${Platform.pathSeparator}Cache',
+      );
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      return dir;
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final dir = Directory(
+      '${tempDir.path}${Platform.pathSeparator}LanShareCache',
+    );
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  }
+
+  Future<File> createTempCacheFile(String fileName) async {
+    final cacheDir = await getBaseCacheDirectory();
+    final safeName = _sanitize(fileName);
+    return File('${cacheDir.path}${Platform.pathSeparator}$safeName');
+  }
+
   Future<Directory> ensureSenderCategoryDirectory({
     required String senderName,
     required String category,
