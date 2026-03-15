@@ -1,14 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 class LogService {
   LogService._internal();
 
   static final LogService instance = LogService._internal();
 
-  final List<String> _logs = [];
+  final List<String> _logs = <String>[];
   final StreamController<List<String>> _logStreamController =
       StreamController<List<String>>.broadcast();
 
@@ -17,25 +15,27 @@ class LogService {
 
   Stream<List<String>> get logsStream => _logStreamController.stream;
 
-  List<String> get currentLogs => List.unmodifiable(_logs);
+  List<String> get currentLogs => List<String>.unmodifiable(_logs);
 
-  String get allLogsText => _logs.reversed.join('\n');
+  String get allLogsText => _logs.join('\n');
 
   Future<void> init() async {
     if (_ready) return;
 
-    final dir = await getApplicationSupportDirectory();
-    final logDir = Directory('${dir.path}${Platform.pathSeparator}logs');
+    final logDir = Directory(
+      '${Directory.current.path}${Platform.pathSeparator}logs',
+    );
 
     if (!await logDir.exists()) {
       await logDir.create(recursive: true);
     }
 
-    final today = DateTime.now();
+    final now = DateTime.now();
     final fileName =
-        '${today.year.toString().padLeft(4, '0')}-'
-        '${today.month.toString().padLeft(2, '0')}-'
-        '${today.day.toString().padLeft(2, '0')}.log';
+        'lan_share_'
+        '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}.log';
 
     _logFile = File('${logDir.path}${Platform.pathSeparator}$fileName');
 
@@ -60,48 +60,47 @@ class LogService {
   }
 
   Future<String> exportLogs() async {
-    final exportFile = await _buildExportFile();
-    await exportFile.writeAsString(allLogsText, flush: true);
-    return exportFile.path;
-  }
+    final exportDir = Directory(
+      '${Directory.current.path}${Platform.pathSeparator}logs',
+    );
 
-  Future<File> _buildExportFile() async {
-    final now = DateTime.now();
-    final fileName =
-        'lan_share_logs_'
-        '${now.year.toString().padLeft(4, '0')}'
-        '${now.month.toString().padLeft(2, '0')}'
-        '${now.day.toString().padLeft(2, '0')}_'
-        '${now.hour.toString().padLeft(2, '0')}'
-        '${now.minute.toString().padLeft(2, '0')}'
-        '${now.second.toString().padLeft(2, '0')}.txt';
-
-    if (Platform.isWindows) {
-      final userProfile = Platform.environment['USERPROFILE'];
-      if (userProfile != null && userProfile.isNotEmpty) {
-        final desktopDir = Directory(
-          '$userProfile${Platform.pathSeparator}Desktop',
-        );
-        if (await desktopDir.exists()) {
-          return File('${desktopDir.path}${Platform.pathSeparator}$fileName');
-        }
-      }
+    if (!await exportDir.exists()) {
+      await exportDir.create(recursive: true);
     }
 
-    final dir = await getApplicationDocumentsDirectory();
-    return File('${dir.path}${Platform.pathSeparator}$fileName');
+    final now = DateTime.now();
+    final fileName =
+        'lan_share_export_'
+        '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}_'
+        '${now.hour.toString().padLeft(2, '0')}-'
+        '${now.minute.toString().padLeft(2, '0')}-'
+        '${now.second.toString().padLeft(2, '0')}.txt';
+
+    final file = File('${exportDir.path}${Platform.pathSeparator}$fileName');
+
+    await file.writeAsString(allLogsText, flush: true);
+    return file.path;
+  }
+
+  Future<void> clear() async {
+    _logs.clear();
+    _logStreamController.add(List<String>.unmodifiable(_logs));
+    await info('Logs cleared');
   }
 
   Future<void> _write(String level, String message) async {
     final now = DateTime.now();
     final line = '[${_formatTime(now)}] [$level] $message';
 
-    _logs.insert(0, line);
-    if (_logs.length > 500) {
-      _logs.removeLast();
+    _logs.add(line);
+
+    if (_logs.length > 5000) {
+      _logs.removeAt(0);
     }
 
-    _logStreamController.add(List.unmodifiable(_logs));
+    _logStreamController.add(List<String>.unmodifiable(_logs));
 
     if (_logFile != null) {
       await _logFile!.writeAsString(

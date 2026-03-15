@@ -68,8 +68,7 @@ class MessageService {
             }
 
             final fromName = map['fromName'] as String? ?? 'Unknown Device';
-            final fromIp =
-                map['fromIp'] as String? ?? socket.remoteAddress.address;
+            final fromIp = socket.remoteAddress.address;
             final messageText = map['text'] as String? ?? '';
             final contentType = map['contentType'] as String? ?? 'text/plain';
             final preserveFormat = map['preserveFormat'] as bool? ?? true;

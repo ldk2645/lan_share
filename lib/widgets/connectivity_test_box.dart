@@ -66,13 +66,23 @@ class _ConnectivityTestBoxState extends State<ConnectivityTestBox> {
           ),
         ),
         const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerRight,
-          child: ElevatedButton.icon(
-            onPressed: _submit,
-            icon: const Icon(Icons.network_check),
-            label: const Text('Test Connection'),
-          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.end,
+          children: [
+            if (widget.onSelfTest != null)
+              OutlinedButton.icon(
+                onPressed: widget.onSelfTest,
+                icon: const Icon(Icons.computer),
+                label: const Text('Self Test'),
+              ),
+            ElevatedButton.icon(
+              onPressed: _submit,
+              icon: const Icon(Icons.network_check),
+              label: const Text('Test Connection'),
+            ),
+          ],
         ),
       ],
     );

@@ -75,7 +75,7 @@ class DiscoveryService {
       if (deviceId.isEmpty || deviceId == selfId) return;
 
       final name = map['name'] as String? ?? 'Unknown Device';
-      final ip = map['ip'] as String? ?? datagram.address.address;
+      final ip = datagram.address.address;
       final remoteTextPort = map['textPort'] as int? ?? textPort;
       final remoteFilePort = map['filePort'] as int? ?? filePort;
 

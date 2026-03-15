@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import '../models/device.dart';
 import '../models/transfer_task.dart';
 import '../services/connectivity_test_service.dart';
@@ -11,7 +13,6 @@ import '../services/file_transfer_service.dart';
 import '../services/log_service.dart';
 import '../services/message_service.dart';
 import '../services/save_location_service.dart';
-import '../utils/network_utils.dart';
 import '../widgets/connectivity_test_box.dart';
 import '../widgets/device_list.dart';
 import '../widgets/drop_panel.dart';
@@ -41,7 +42,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   StreamSubscription<ReceivedFolderRecord>? _folderSub;
 
   List<Device> _devices = <Device>[];
-  List<TransferTask> _tasks = <TransferTask>[];
+  final List<TransferTask> _tasks = <TransferTask>[];
   List<String> _logs = <String>[];
   List<ReceivedTextMessage> _receivedMessages = <ReceivedTextMessage>[];
   List<ReceivedFileRecord> _receivedFiles = <ReceivedFileRecord>[];
@@ -58,7 +59,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   Future<void> _initServices() async {
     await LogService.instance.init();
 
-    final ip = await NetworkUtils.findLocalIpv4();
+    final ip = await _findBestLocalIpv4();
     if (mounted) {
       setState(() {
         _localIp = ip;
@@ -106,13 +107,6 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
 
     _fileSub = _fileTransferService.receivedFileStream.listen((file) {
-      _discoveryService.rememberPeer(
-        name: file.fromDeviceName,
-        ip: file.fromIp,
-        textPort: file.fromTextPort,
-        filePort: file.fromFilePort,
-      );
-
       if (!mounted) return;
       setState(() {
         _receivedFiles = <ReceivedFileRecord>[file, ..._receivedFiles];
@@ -120,13 +114,6 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
 
     _folderSub = _fileTransferService.receivedFolderStream.listen((folder) {
-      _discoveryService.rememberPeer(
-        name: folder.fromDeviceName,
-        ip: folder.fromIp,
-        textPort: folder.fromTextPort,
-        filePort: folder.fromFilePort,
-      );
-
       if (!mounted) return;
       setState(() {
         _receivedFolders = <ReceivedFolderRecord>[folder, ..._receivedFolders];
@@ -142,6 +129,62 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     await _messageService.start();
     await _fileTransferService.startReceiver();
     await _discoveryService.start();
+  }
+
+  Future<String> _findBestLocalIpv4() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+
+      String? fallback;
+
+      for (final interface in interfaces) {
+        final name = interface.name.toLowerCase();
+
+        final looksVirtual =
+            name.contains('virtual') ||
+            name.contains('vmware') ||
+            name.contains('vbox') ||
+            name.contains('hyper-v') ||
+            name.contains('vethernet') ||
+            name.contains('vpn') ||
+            name.contains('loopback') ||
+            name.contains('bluetooth');
+
+        for (final addr in interface.addresses) {
+          final ip = addr.address;
+
+          if (ip.startsWith('127.') || ip.startsWith('169.254.')) {
+            continue;
+          }
+
+          fallback ??= ip;
+
+          final isPrivateLan =
+              ip.startsWith('192.168.') ||
+              ip.startsWith('10.') ||
+              _is172Private(ip);
+
+          if (isPrivateLan && !looksVirtual) {
+            return ip;
+          }
+        }
+      }
+
+      return fallback ?? '0.0.0.0';
+    } catch (_) {
+      return '0.0.0.0';
+    }
+  }
+
+  bool _is172Private(String ip) {
+    final parts = ip.split('.');
+    if (parts.length != 4) return false;
+    if (parts[0] != '172') return false;
+    final second = int.tryParse(parts[1]) ?? -1;
+    return second >= 16 && second <= 31;
   }
 
   String _buildSelfId() {
@@ -225,7 +268,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     );
 
     setState(() {
-      _tasks = <TransferTask>[
+      _tasks.insert(
+        0,
         TransferTask(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           title: 'Text (${text.length} chars)',
@@ -233,8 +277,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
           progress: 1,
           status: 'Sent',
         ),
-        ..._tasks,
-      ];
+      );
     });
 
     _textController.clear();
@@ -262,8 +305,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
       return;
     }
 
-    final path = result.files.first.path;
-    if (path == null || path.trim().isEmpty) {
+    final picked = result.files.first;
+    final path = picked.path;
+
+    if (path == null || path.isEmpty) {
       _showMessage('Cannot read picked file path');
       await LogService.instance.error('Picked file path is empty');
       return;
@@ -282,7 +327,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     );
 
     setState(() {
-      _tasks = <TransferTask>[task, ..._tasks];
+      _tasks.insert(0, task);
     });
 
     await _fileTransferService.sendFileToDevices(
@@ -330,7 +375,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     );
 
     setState(() {
-      _tasks = <TransferTask>[task, ..._tasks];
+      _tasks.insert(0, task);
     });
 
     await _fileTransferService.sendFolderToDevices(
@@ -440,8 +485,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
       builder: (context) {
         return Dialog(
           child: Container(
-            width: 820,
-            height: 620,
+            width: 760,
+            height: 560,
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -513,6 +558,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
 
                         await file.writeAsString(controller.text, flush: true);
 
+                        await LogService.instance.info(
+                          'Edited text saved to ${file.path}',
+                        );
+
                         if (!mounted) return;
                         Navigator.of(context).pop();
                         _showMessage('Edited text saved: ${file.path}');
@@ -543,6 +592,56 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     _showMessage('Switched to default save path');
   }
 
+  Widget _buildHeaderCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEEF6FF),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(
+              Icons.devices_other,
+              color: Color(0xFF2563EB),
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Lan Share',
+                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Device: ${_buildDesktopName()}',
+                  style: const TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'IP: $_localIp   Text: 40402   File: 40403   Online: ${_devices.length}',
+                  style: const TextStyle(color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSavePathCard() {
     final isDefault = SaveLocationService.instance.useDefaultPath;
     final custom = SaveLocationService.instance.customBasePath;
@@ -551,22 +650,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
         ? '${Directory.current.path}${Platform.pathSeparator}Received'
         : (custom ?? 'Not selected');
 
-    final cachePath = '${Directory.current.path}${Platform.pathSeparator}Cache';
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        borderRadius: BorderRadius.circular(16),
-      ),
+    return _buildCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Save Path',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           Text(
@@ -574,22 +664,19 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
             style: const TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 6),
-          SelectableText(shownPath),
-          const SizedBox(height: 8),
-          const Text(
-            'Cache Folder',
-            style: TextStyle(fontSize: 13, color: Colors.grey),
+          SelectableText(
+            shownPath,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
-          const SizedBox(height: 4),
-          SelectableText(cachePath),
           const SizedBox(height: 10),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               OutlinedButton(
                 onPressed: _useDefaultSavePath,
                 child: const Text('Use Default'),
               ),
-              const SizedBox(width: 8),
               ElevatedButton(
                 onPressed: _chooseSaveBasePath,
                 child: const Text('Choose Custom Folder'),
@@ -601,142 +688,348 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     );
   }
 
-  Widget _buildReceivedTextTab() {
-    if (_receivedMessages.isEmpty) {
-      return const Center(child: Text('No text received yet'));
+  Widget _buildReceivedTextPage() {
+    return _buildCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Received Text',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          if (_receivedMessages.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: Text('No text received yet')),
+            )
+          else
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _receivedMessages.length,
+              itemBuilder: (context, index) {
+                final msg = _receivedMessages[index];
+                return Card(
+                  elevation: 0,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          msg.fromDeviceName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${msg.fromIp} | ${msg.contentType}',
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFE5E7EB)),
+                          ),
+                          child: SelectableText(
+                            msg.text,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: () => _copyReceivedText(msg.text),
+                              icon: const Icon(Icons.copy),
+                              label: const Text('Copy'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () => _editReceivedText(msg),
+                              icon: const Icon(Icons.edit),
+                              label: const Text('Edit'),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: () => _saveReceivedText(msg),
+                              icon: const Icon(Icons.save),
+                              label: const Text('Save'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildFolderChildren(String folderPath) {
+    final dir = Directory(folderPath);
+    if (!dir.existsSync()) {
+      return <Widget>[
+        const ListTile(
+          dense: true,
+          title: Text(
+            'Folder does not exist',
+            style: TextStyle(fontSize: 12, color: Colors.redAccent),
+          ),
+        ),
+      ];
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _receivedMessages.length,
-      itemBuilder: (context, index) {
-        final msg = _receivedMessages[index];
-        return Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  msg.fromDeviceName,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
+    final entities = dir.listSync(recursive: true);
+
+    if (entities.isEmpty) {
+      return <Widget>[
+        const ListTile(
+          dense: true,
+          title: Text(
+            'Empty folder',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+        ),
+      ];
+    }
+
+    return entities.map((entity) {
+      final isFile = entity is File;
+      final name = entity.path.replaceAll('\\', '/').split('/').last;
+      return ListTile(
+        dense: true,
+        leading: Icon(
+          isFile ? Icons.insert_drive_file : Icons.folder,
+          size: 16,
+          color: const Color(0xFF2563EB),
+        ),
+        title: Text(name, style: const TextStyle(fontSize: 12)),
+      );
+    }).toList();
+  }
+
+  Widget _buildReceivedStoragePage() {
+    return _buildCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Received Files / Folders',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          if (_receivedFiles.isEmpty && _receivedFolders.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: Text('No file or folder received yet')),
+            )
+          else ...[
+            if (_receivedFolders.isNotEmpty) ...[
+              const Text(
+                'Folders',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              ..._receivedFolders.map((folder) {
+                return Card(
+                  elevation: 0,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: const BorderSide(color: Color(0xFFE5E7EB)),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${msg.fromIp} | ${msg.contentType}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  width: double.infinity,
-                  constraints: const BoxConstraints(maxHeight: 220),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  child: ExpansionTile(
+                    leading: const Icon(Icons.folder, color: Color(0xFF2563EB)),
+                    title: Text(folder.folderName),
+                    subtitle: SelectableText(
+                      'From: ${folder.fromDeviceName} (${folder.fromIp})\nSaved: ${folder.savedPath}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    children: _buildFolderChildren(folder.savedPath),
                   ),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: SingleChildScrollView(
-                      child: SelectableText(
-                        msg.text,
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 14,
-                          height: 1.4,
-                        ),
+                );
+              }),
+              const SizedBox(height: 10),
+            ],
+            if (_receivedFiles.isNotEmpty) ...[
+              const Text(
+                'Files',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              ..._receivedFiles.map((file) {
+                return Card(
+                  elevation: 0,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: const BorderSide(color: Color(0xFFE5E7EB)),
+                  ),
+                  child: ListTile(
+                    leading: const Icon(
+                      Icons.insert_drive_file,
+                      color: Color(0xFF2563EB),
+                    ),
+                    title: Text(file.fileName),
+                    subtitle: SelectableText(
+                      'From: ${file.fromDeviceName} (${file.fromIp})\n'
+                      'Size: ${file.size} bytes\n'
+                      'Saved: ${file.savedPath}',
+                      style: const TextStyle(fontSize: 12, height: 1.4),
+                    ),
+                    isThreeLine: true,
+                  ),
+                );
+              }),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSendPage() {
+    final defaultHost = _devices.isNotEmpty ? _devices.first.ip : '';
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 1200;
+
+        if (wide) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 7,
+                child: Column(
+                  children: [
+                    _buildCard(
+                      child: TextSendBox(
+                        controller: _textController,
+                        onSend: _sendText,
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: () => _copyReceivedText(msg.text),
-                      icon: const Icon(Icons.copy),
-                      label: const Text('Copy'),
+                    const SizedBox(height: 12),
+                    _buildCard(
+                      child: DropPanel(
+                        onPickFile: _pickAndSendFile,
+                        onPickFolder: _pickAndSendFolder,
+                      ),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: () => _editReceivedText(msg),
-                      icon: const Icon(Icons.edit),
-                      label: const Text('Edit'),
-                    ),
-                    ElevatedButton.icon(
-                      onPressed: () => _saveReceivedText(msg),
-                      icon: const Icon(Icons.save),
-                      label: const Text('Save'),
-                    ),
+                    const SizedBox(height: 12),
+                    _buildCard(child: TransferQueue(tasks: _tasks)),
                   ],
                 ),
-              ],
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                flex: 5,
+                child: Column(
+                  children: [
+                    _buildCard(
+                      child: DeviceList(
+                        devices: _devices,
+                        onToggle: _toggleDevice,
+                        onRemove: _removeDevice,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildCard(
+                      child: ManualDeviceBox(onAddDevice: _addManualDevice),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildCard(
+                      child: ConnectivityTestBox(
+                        defaultHost: defaultHost,
+                        onTest: _testConnection,
+                        onSelfTest: _selfTest,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildSavePathCard(),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
+
+        return Column(
+          children: [
+            _buildCard(
+              child: DeviceList(
+                devices: _devices,
+                onToggle: _toggleDevice,
+                onRemove: _removeDevice,
+              ),
             ),
-          ),
+            const SizedBox(height: 12),
+            _buildCard(child: ManualDeviceBox(onAddDevice: _addManualDevice)),
+            const SizedBox(height: 12),
+            _buildCard(
+              child: ConnectivityTestBox(
+                defaultHost: defaultHost,
+                onTest: _testConnection,
+                onSelfTest: _selfTest,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildSavePathCard(),
+            const SizedBox(height: 12),
+            _buildCard(
+              child: TextSendBox(
+                controller: _textController,
+                onSend: _sendText,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildCard(
+              child: DropPanel(
+                onPickFile: _pickAndSendFile,
+                onPickFolder: _pickAndSendFolder,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildCard(child: TransferQueue(tasks: _tasks)),
+          ],
         );
       },
     );
   }
 
-  Widget _buildReceivedStorageTab() {
-    if (_receivedFiles.isEmpty && _receivedFolders.isEmpty) {
-      return const Center(child: Text('No file or folder received yet'));
-    }
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (_receivedFolders.isNotEmpty) ...[
-          const Text(
-            'Folders',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          ..._receivedFolders.map((folder) {
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: ListTile(
-                leading: const Icon(Icons.folder),
-                title: Text(folder.folderName),
-                subtitle: SelectableText(
-                  'From: ${folder.fromDeviceName} (${folder.fromIp})\n'
-                  'Saved: ${folder.savedPath}',
-                ),
-                isThreeLine: true,
-              ),
-            );
-          }),
-          const SizedBox(height: 8),
-        ],
-        if (_receivedFiles.isNotEmpty) ...[
-          const Text(
-            'Files',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          ..._receivedFiles.map((file) {
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: ListTile(
-                leading: const Icon(Icons.insert_drive_file),
-                title: Text(file.fileName),
-                subtitle: SelectableText(
-                  'From: ${file.fromDeviceName} (${file.fromIp})\n'
-                  'Size: ${file.size} bytes\n'
-                  'Saved: ${file.savedPath}',
-                ),
-                isThreeLine: true,
-              ),
-            );
-          }),
-        ],
-      ],
+  Widget _buildCard({required Widget child}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: child,
     );
   }
 
@@ -749,116 +1042,70 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final deviceCount = _devices.length;
-    final defaultHost = _devices.isNotEmpty ? _devices.first.ip : '';
-
     return DefaultTabController(
       length: 3,
       child: Scaffold(
         backgroundColor: const Color(0xFFF6F8FB),
-        body: Row(
-          children: [
-            Expanded(
-              child: Column(
-                children: [
-                  Container(
-                    color: Colors.white,
-                    child: const TabBar(
-                      tabs: [
-                        Tab(text: 'Logs'),
-                        Tab(text: 'Received Text'),
-                        Tab(text: 'Received Storage'),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: LogPanel(
-                            logs: _logs,
-                            onCopyAll: _copyAllLogs,
-                            onSaveLogs: _saveLogs,
-                          ),
-                        ),
-                        _buildReceivedTextTab(),
-                        _buildReceivedStorageTab(),
-                      ],
-                    ),
-                  ),
-                ],
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+                child: _buildHeaderCard(),
               ),
-            ),
-            Container(
-              width: 450,
-              decoration: const BoxDecoration(
-                color: Color(0xFFFDFDFD),
-                border: Border(left: BorderSide(color: Color(0xFFE5E7EB))),
-              ),
-              child: SafeArea(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Lan Share',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Device: ${_buildDesktopName()}',
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'IP: $_localIp   Text: 40402   File: 40403   Online: $deviceCount',
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                      const SizedBox(height: 16),
-                      _buildSavePathCard(),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        height: 210,
-                        child: DeviceList(
-                          devices: _devices,
-                          onToggle: _toggleDevice,
-                          onRemove: _removeDevice,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      ManualDeviceBox(onAddDevice: _addManualDevice),
-                      const SizedBox(height: 16),
-                      ConnectivityTestBox(
-                        defaultHost: defaultHost,
-                        onTest: _testConnection,
-                        onSelfTest: _selfTest,
-                      ),
-                      const SizedBox(height: 16),
-                      DropPanel(
-                        onPickFile: _pickAndSendFile,
-                        onPickFolder: _pickAndSendFolder,
-                      ),
-                      const SizedBox(height: 16),
-                      TextSendBox(
-                        controller: _textController,
-                        onSend: _sendText,
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        height: 240,
-                        child: TransferQueue(tasks: _tasks),
-                      ),
-                    ],
-                  ),
+              const SizedBox(height: 12),
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: const TabBar(
+                  tabs: [
+                    Tab(text: 'Send'),
+                    Tab(text: 'Received Text'),
+                    Tab(text: 'Received Files'),
+                  ],
                 ),
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Column(
+                        children: [
+                          _buildSendPage(),
+                          const SizedBox(height: 14),
+                          _buildCard(
+                            child: SizedBox(
+                              height: 220,
+                              child: LogPanel(
+                                logs: _logs,
+                                onCopyAll: _copyAllLogs,
+                                onSaveLogs: _saveLogs,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                        ],
+                      ),
+                    ),
+                    SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                      child: _buildReceivedTextPage(),
+                    ),
+                    SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                      child: _buildReceivedStoragePage(),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

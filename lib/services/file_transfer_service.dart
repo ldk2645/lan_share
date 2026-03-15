@@ -91,7 +91,7 @@ class FileTransferService {
   }
 
   Future<void> _handleClient(Socket socket) async {
-    final headerBytes = <int>[];
+    final List<int> headerBytes = <int>[];
     bool headerDone = false;
 
     IOSink? sink;
@@ -110,7 +110,7 @@ class FileTransferService {
     try {
       await for (final chunk in socket) {
         if (!headerDone) {
-          final index = chunk.indexOf(10);
+          final index = chunk.indexOf(10); // \n
 
           if (index == -1) {
             headerBytes.addAll(chunk);
@@ -119,11 +119,12 @@ class FileTransferService {
 
           headerBytes.addAll(chunk.sublist(0, index));
           final headerText = utf8.decode(headerBytes);
-          final header = jsonDecode(headerText) as Map<String, dynamic>;
+          final Map<String, dynamic> header =
+              jsonDecode(headerText) as Map<String, dynamic>;
 
           packetType = header['type'] as String? ?? '';
           fromName = header['fromName'] as String? ?? 'Unknown_Device';
-          fromIp = header['fromIp'] as String? ?? socket.remoteAddress.address;
+          fromIp = socket.remoteAddress.address;
           fromTextPort = header['fromTextPort'] as int? ?? 40402;
           fromFilePort = header['fromFilePort'] as int? ?? 40403;
           expectedSize = header['fileSize'] as int? ?? 0;
@@ -333,7 +334,7 @@ class FileTransferService {
           timeout: const Duration(seconds: 5),
         );
 
-        final header = {
+        final Map<String, dynamic> header = <String, dynamic>{
           'type': 'file_transfer',
           'fileName': fileName,
           'fileSize': fileSize,
@@ -399,7 +400,7 @@ class FileTransferService {
           timeout: const Duration(seconds: 5),
         );
 
-        final header = {
+        final Map<String, dynamic> header = <String, dynamic>{
           'type': 'folder_transfer',
           'folderName': folderName,
           'fileSize': zipSize,

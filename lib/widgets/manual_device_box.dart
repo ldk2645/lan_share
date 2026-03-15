@@ -86,9 +86,12 @@ class _ManualDeviceBoxState extends State<ManualDeviceBox> {
           ),
         ),
         const SizedBox(height: 8),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Expanded(
+            SizedBox(
+              width: 180,
               child: TextField(
                 controller: _textPortController,
                 keyboardType: TextInputType.number,
@@ -99,8 +102,8 @@ class _ManualDeviceBoxState extends State<ManualDeviceBox> {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
+            SizedBox(
+              width: 180,
               child: TextField(
                 controller: _filePortController,
                 keyboardType: TextInputType.number,

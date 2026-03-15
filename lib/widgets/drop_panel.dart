@@ -12,47 +12,65 @@ class DropPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.blue.shade50,
-        border: Border.all(color: Colors.blue.shade200, width: 1.5),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        children: [
-          Icon(Icons.upload_file, size: 48, color: Colors.blue.shade400),
-          const SizedBox(height: 12),
-          const Text(
-            'Choose a file to send now',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 500;
+
+        return Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(compact ? 14 : 20),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            border: Border.all(color: Colors.blue.shade200, width: 1.5),
+            borderRadius: BorderRadius.circular(16),
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'File sending is real now. Folder sending will be added next.',
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            alignment: WrapAlignment.center,
+          child: Column(
             children: [
-              ElevatedButton.icon(
-                onPressed: onPickFile,
-                icon: const Icon(Icons.insert_drive_file),
-                label: const Text('Choose File'),
+              Icon(
+                Icons.upload_file,
+                size: compact ? 36 : 48,
+                color: Colors.blue.shade400,
               ),
-              ElevatedButton.icon(
-                onPressed: onPickFolder,
-                icon: const Icon(Icons.folder),
-                label: const Text('Folder Later'),
+              SizedBox(height: compact ? 8 : 12),
+              Text(
+                'Choose a file or folder to send',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: compact ? 14 : 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(height: compact ? 4 : 6),
+              Text(
+                'File and folder sending are available now.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: compact ? 12 : 13,
+                  color: Colors.grey[700],
+                ),
+              ),
+              SizedBox(height: compact ? 10 : 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                alignment: WrapAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: onPickFile,
+                    icon: const Icon(Icons.insert_drive_file),
+                    label: const Text('Choose File'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: onPickFolder,
+                    icon: const Icon(Icons.folder),
+                    label: const Text('Choose Folder'),
+                  ),
+                ],
               ),
             ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
