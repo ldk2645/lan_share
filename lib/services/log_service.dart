@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:path_provider/path_provider.dart';
+
 class LogService {
   LogService._internal();
 
@@ -11,6 +13,7 @@ class LogService {
       StreamController<List<String>>.broadcast();
 
   File? _logFile;
+  Directory? _logDir;
   bool _ready = false;
 
   Stream<List<String>> get logsStream => _logStreamController.stream;
@@ -22,12 +25,9 @@ class LogService {
   Future<void> init() async {
     if (_ready) return;
 
-    final logDir = Directory(
-      '${Directory.current.path}${Platform.pathSeparator}logs',
-    );
-
-    if (!await logDir.exists()) {
-      await logDir.create(recursive: true);
+    _logDir = await _resolveLogDirectory();
+    if (!await _logDir!.exists()) {
+      await _logDir!.create(recursive: true);
     }
 
     final now = DateTime.now();
@@ -37,14 +37,14 @@ class LogService {
         '${now.month.toString().padLeft(2, '0')}-'
         '${now.day.toString().padLeft(2, '0')}.log';
 
-    _logFile = File('${logDir.path}${Platform.pathSeparator}$fileName');
+    _logFile = File('${_logDir!.path}${Platform.pathSeparator}$fileName');
 
     if (!await _logFile!.exists()) {
       await _logFile!.create(recursive: true);
     }
 
     _ready = true;
-    await info('Log service started');
+    await info('Log service started at ${_logDir!.path}');
   }
 
   Future<void> info(String message) async {
@@ -60,9 +60,7 @@ class LogService {
   }
 
   Future<String> exportLogs() async {
-    final exportDir = Directory(
-      '${Directory.current.path}${Platform.pathSeparator}logs',
-    );
+    final exportDir = _logDir ?? await _resolveLogDirectory();
 
     if (!await exportDir.exists()) {
       await exportDir.create(recursive: true);
@@ -107,6 +105,19 @@ class LogService {
         '$line\n',
         mode: FileMode.append,
         flush: true,
+      );
+    }
+  }
+
+  Future<Directory> _resolveLogDirectory() async {
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      return Directory(
+        '${supportDir.path}${Platform.pathSeparator}lan_share${Platform.pathSeparator}logs',
+      );
+    } catch (_) {
+      return Directory(
+        '${Directory.current.path}${Platform.pathSeparator}logs',
       );
     }
   }

@@ -1,45 +1,109 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
-
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
-
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
+# -------------------------
+# Flutter / Dart
+# -------------------------
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
-.pub-cache/
+.packages
 .pub/
-/build/
-/coverage/
+.pub-cache/
+build/
 
-# Symbolication related
-app.*.symbols
+# Generated files
+**/generated_plugin_registrant.dart
 
-# Obfuscation related
-app.*.map.json
+# Flutter version / package files
+.flutter-versions
+.metadata
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
+# -------------------------
+# Logs
+# -------------------------
+*.log
+logs/
+log/
+debug.log
+
+# -------------------------
+# IDE
+# -------------------------
+.idea/
+*.iml
+.vscode/
+
+# -------------------------
+# OS files
+# -------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------------------------
+# Environment / secrets
+# -------------------------
+.env
+.env.*
+*.jks
+*.keystore
+key.properties
+android/key.properties
+android/app/upload-keystore.jks
+android/app/*.jks
+android/app/*.keystore
+
+# -------------------------
+# Android
+# -------------------------
+android/.gradle/
+android/local.properties
+android/captures/
+android/app/debug/
+android/app/profile/
+android/app/release/
+android/**/build/
+
+# -------------------------
+# Linux / CMake / native build cache
+# -------------------------
+linux/flutter/ephemeral/
+linux/**/cmake-build-*/
+linux/**/CMakeFiles/
+linux/**/CMakeCache.txt
+linux/**/Makefile
+linux/**/cmake_install.cmake
+linux/**/install_manifest.txt
+
+# -------------------------
+# Windows / CMake / native build cache
+# -------------------------
+windows/flutter/ephemeral/
+windows/**/cmake-build-*/
+windows/**/CMakeFiles/
+windows/**/CMakeCache.txt
+windows/**/Makefile
+windows/**/cmake_install.cmake
+windows/**/install_manifest.txt
+
+# -------------------------
+# Temporary / backup files
+# -------------------------
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# -------------------------
+# Archive / package outputs
+# -------------------------
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar
+
+# -------------------------
+# Test / coverage
+# -------------------------
+coverage/

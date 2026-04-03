@@ -39,18 +39,7 @@ class SaveLocationService {
       return dir;
     }
 
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-      final dir = Directory(
-        '${Directory.current.path}${Platform.pathSeparator}Received',
-      );
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
-      return dir;
-    }
-
-    final docDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docDir.path}${Platform.pathSeparator}Received');
+    final dir = await _resolveDefaultDirectory('Received');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -58,7 +47,16 @@ class SaveLocationService {
   }
 
   Future<Directory> getBaseCacheDirectory() async {
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final dir = Directory(
+        '${tempDir.path}${Platform.pathSeparator}LanShareCache',
+      );
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      return dir;
+    } catch (_) {
       final dir = Directory(
         '${Directory.current.path}${Platform.pathSeparator}Cache',
       );
@@ -67,15 +65,6 @@ class SaveLocationService {
       }
       return dir;
     }
-
-    final tempDir = await getTemporaryDirectory();
-    final dir = Directory(
-      '${tempDir.path}${Platform.pathSeparator}LanShareCache',
-    );
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
   }
 
   Future<File> createTempCacheFile(String fileName) async {
@@ -83,6 +72,12 @@ class SaveLocationService {
     final safeName = _sanitize(fileName);
     return File('${cacheDir.path}${Platform.pathSeparator}$safeName');
   }
+
+  Future<String> previewBaseReceivePath() async {
+    final dir = await getBaseReceiveDirectory();
+    return dir.path;
+  }
+
 
   Future<Directory> ensureSenderCategoryDirectory({
     required String senderName,
@@ -102,6 +97,21 @@ class SaveLocationService {
     }
 
     return dir;
+  }
+
+  String sanitizeFileName(String value) {
+    return _sanitize(value);
+  }
+
+  Future<Directory> _resolveDefaultDirectory(String leafName) async {
+    try {
+      final base = await getApplicationDocumentsDirectory();
+      return Directory('${base.path}${Platform.pathSeparator}$leafName');
+    } catch (_) {
+      return Directory(
+        '${Directory.current.path}${Platform.pathSeparator}$leafName',
+      );
+    }
   }
 
   String _sanitize(String value) {

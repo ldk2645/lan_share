@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -22,6 +23,8 @@ class MobileHomePage extends StatefulWidget {
 }
 
 class _MobileHomePageState extends State<MobileHomePage> {
+  final TextEditingController _textController = TextEditingController();
+
   late final DiscoveryService _discoveryService;
   late final MessageService _messageService;
   late final FileTransferService _fileTransferService;
@@ -31,10 +34,10 @@ class _MobileHomePageState extends State<MobileHomePage> {
   StreamSubscription<ReceivedFileRecord>? _fileSub;
   StreamSubscription<ReceivedFolderRecord>? _folderSub;
 
-  List<Device> _devices = [];
-  List<ReceivedTextMessage> _messages = [];
-  List<ReceivedFileRecord> _files = [];
-  List<ReceivedFolderRecord> _folders = [];
+  List<Device> _devices = <Device>[];
+  List<ReceivedTextMessage> _messages = <ReceivedTextMessage>[];
+  List<ReceivedFileRecord> _files = <ReceivedFileRecord>[];
+  List<ReceivedFolderRecord> _folders = <ReceivedFolderRecord>[];
 
   String _localIp = 'Loading...';
 
@@ -60,7 +63,6 @@ class _MobileHomePageState extends State<MobileHomePage> {
     );
 
     _messageService = MessageService(selfName: _buildPhoneName());
-
     _fileTransferService = FileTransferService(selfName: _buildPhoneName());
 
     _deviceSub = _discoveryService.devicesStream.listen((devices) {
@@ -71,23 +73,44 @@ class _MobileHomePageState extends State<MobileHomePage> {
     });
 
     _messageSub = _messageService.messageStream.listen((message) {
+      _discoveryService.rememberPeer(
+        name: message.fromDeviceName,
+        ip: message.fromIp,
+        textPort: message.fromTextPort,
+        filePort: message.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
-        _messages = [message, ..._messages];
+        _messages = <ReceivedTextMessage>[message, ..._messages];
       });
     });
 
     _fileSub = _fileTransferService.receivedFileStream.listen((file) {
+      _discoveryService.rememberPeer(
+        name: file.fromDeviceName,
+        ip: file.fromIp,
+        textPort: file.fromTextPort,
+        filePort: file.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
-        _files = [file, ..._files];
+        _files = <ReceivedFileRecord>[file, ..._files];
       });
     });
 
     _folderSub = _fileTransferService.receivedFolderStream.listen((folder) {
+      _discoveryService.rememberPeer(
+        name: folder.fromDeviceName,
+        ip: folder.fromIp,
+        textPort: folder.fromTextPort,
+        filePort: folder.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
-        _folders = [folder, ..._folders];
+        _folders = <ReceivedFolderRecord>[folder, ..._folders];
       });
     });
 
@@ -104,8 +127,112 @@ class _MobileHomePageState extends State<MobileHomePage> {
     return 'Android Device';
   }
 
+  List<Device> _selectedDevices() {
+    return _devices.where((device) => device.selected).toList();
+  }
+
+  void _toggleDevice(int index) {
+    final device = _devices[index];
+    _discoveryService.updateDeviceSelection(device.id, !device.selected);
+  }
+
+  Future<void> _sendText() async {
+    final selectedDevices = _selectedDevices();
+    final text = _textController.text.trimRight();
+
+    if (selectedDevices.isEmpty) {
+      _showMessage('Please select at least one device');
+      return;
+    }
+
+    if (text.trim().isEmpty) {
+      _showMessage('Please input text first');
+      return;
+    }
+
+    await _messageService.sendTextToDevices(
+      text: text,
+      fromName: _buildPhoneName(),
+      fromIp: _localIp,
+      devices: selectedDevices,
+    );
+
+    _textController.clear();
+    _showMessage('Text sent');
+  }
+
+  Future<void> _pickAndSendFiles() async {
+    final selectedDevices = _selectedDevices();
+    if (selectedDevices.isEmpty) {
+      _showMessage('Please select at least one device');
+      return;
+    }
+
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: false,
+      withReadStream: false,
+      lockParentWindow: true,
+    );
+
+    if (result == null || result.files.isEmpty) {
+      return;
+    }
+
+    final files = <File>[];
+    for (final picked in result.files) {
+      final path = picked.path;
+      if (path == null || path.isEmpty) continue;
+      files.add(File(path));
+    }
+
+    if (files.isEmpty) {
+      _showMessage('Cannot read picked file path');
+      return;
+    }
+
+    await _fileTransferService.sendFilesToDevices(
+      files: files,
+      fromName: _buildPhoneName(),
+      fromIp: _localIp,
+      devices: selectedDevices,
+    );
+
+    _showMessage(
+      files.length == 1 ? 'File sent' : '${files.length} files sent',
+    );
+  }
+
+  Future<void> _pickAndSendFolder() async {
+    final selectedDevices = _selectedDevices();
+    if (selectedDevices.isEmpty) {
+      _showMessage('Please select at least one device');
+      return;
+    }
+
+    final folderPath = await FilePicker.platform.getDirectoryPath(
+      lockParentWindow: true,
+    );
+
+    if (folderPath == null || folderPath.trim().isEmpty) {
+      return;
+    }
+
+    final folder = Directory(folderPath);
+
+    await _fileTransferService.sendFolderToDevices(
+      folder: folder,
+      fromName: _buildPhoneName(),
+      fromIp: _localIp,
+      devices: selectedDevices,
+    );
+
+    _showMessage('Folder sent');
+  }
+
   @override
   void dispose() {
+    _textController.dispose();
     _deviceSub?.cancel();
     _messageSub?.cancel();
     _fileSub?.cancel();
@@ -118,10 +245,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
 
   Future<void> _copyReceivedText(String text) async {
     await Clipboard.setData(ClipboardData(text: text));
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Text copied')));
+    _showMessage('Text copied');
   }
 
   Future<void> _saveReceivedText(ReceivedTextMessage msg) async {
@@ -143,11 +267,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
     await file.writeAsString(msg.text, flush: true);
 
     await LogService.instance.info('Received text saved to ${file.path}');
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Text saved: ${file.path}')));
+    _showMessage('Text saved: ${file.path}');
   }
 
   Future<void> _editReceivedText(ReceivedTextMessage msg) async {
@@ -276,6 +396,114 @@ class _MobileHomePageState extends State<MobileHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Widget _buildDeviceSelector() {
+    if (_devices.isEmpty) {
+      return const Text('No device found yet');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Select target devices',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        ...List<Widget>.generate(_devices.length, (index) {
+          final device = _devices[index];
+          return CheckboxListTile(
+            value: device.selected,
+            onChanged: (_) => _toggleDevice(index),
+            contentPadding: EdgeInsets.zero,
+            title: Text(device.name),
+            subtitle: Text('${device.ip}  |  text ${device.textPort}  file ${device.filePort}'),
+            secondary: Icon(
+              device.online ? Icons.circle : Icons.circle_outlined,
+              size: 12,
+              color: device.online ? Colors.green : Colors.grey,
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildSendTab() {
+    final defaultHost = _devices.isNotEmpty ? _devices.first.ip : '';
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Send',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                _buildDeviceSelector(),
+                const SizedBox(height: 16),
+                const Text(
+                  'Text',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _textController,
+                  minLines: 4,
+                  maxLines: 8,
+                  decoration: const InputDecoration(
+                    hintText: 'Input text to send',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _sendText,
+                    icon: const Icon(Icons.send),
+                    label: const Text('Send Text'),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Files',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _pickAndSendFiles,
+                      icon: const Icon(Icons.insert_drive_file),
+                      label: const Text('Choose Files'),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _pickAndSendFolder,
+                      icon: const Icon(Icons.folder),
+                      label: const Text('Choose Folder'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                ConnectivityTestBox(
+                  defaultHost: defaultHost,
+                  onTest: _testConnection,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildMessageCard(ReceivedTextMessage msg) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -401,14 +629,19 @@ class _MobileHomePageState extends State<MobileHomePage> {
     );
   }
 
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final defaultHost = _devices.isNotEmpty ? _devices.first.ip : '';
-
     return Scaffold(
-      appBar: AppBar(title: const Text('Lan Share Receiver')),
+      appBar: AppBar(title: const Text('Lan Share Android')),
       body: DefaultTabController(
-        length: 3,
+        length: 4,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -432,16 +665,13 @@ class _MobileHomePageState extends State<MobileHomePage> {
                   Text('File Port: 40403'),
                   const SizedBox(height: 4),
                   Text('Online device count: ${_devices.length}'),
-                  const SizedBox(height: 12),
-                  ConnectivityTestBox(
-                    defaultHost: defaultHost,
-                    onTest: _testConnection,
-                  ),
                 ],
               ),
             ),
             const TabBar(
+              isScrollable: true,
               tabs: [
+                Tab(text: 'Send'),
                 Tab(text: 'Text'),
                 Tab(text: 'Storage'),
                 Tab(text: 'Devices'),
@@ -450,6 +680,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
             Expanded(
               child: TabBarView(
                 children: [
+                  _buildSendTab(),
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: _messages.isEmpty
@@ -473,7 +704,10 @@ class _MobileHomePageState extends State<MobileHomePage> {
                             itemBuilder: (context, index) {
                               final d = _devices[index];
                               return ListTile(
-                                leading: const Icon(Icons.devices),
+                                leading: Checkbox(
+                                  value: d.selected,
+                                  onChanged: (_) => _toggleDevice(index),
+                                ),
                                 title: Text(d.name),
                                 subtitle: Text(
                                   '${d.ip}\ntext: ${d.textPort}   file: ${d.filePort}',

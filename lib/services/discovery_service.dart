@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+
 import '../models/device.dart';
 import 'log_service.dart';
 
@@ -9,6 +11,9 @@ class DiscoveryService {
   static const int discoveryPort = 40401;
   static const int textPort = 40402;
   static const int filePort = 40403;
+  static const MethodChannel _networkChannel = MethodChannel(
+    'lan_share/network',
+  );
 
   final String selfId;
   final String selfName;
@@ -17,8 +22,7 @@ class DiscoveryService {
   Timer? _broadcastTimer;
   Timer? _cleanupTimer;
 
-  final Map<String, Device> _devices = {};
-
+  final Map<String, Device> _devices = <String, Device>{};
   final StreamController<List<Device>> _devicesController =
       StreamController<List<Device>>.broadcast();
 
@@ -27,6 +31,10 @@ class DiscoveryService {
   DiscoveryService({required this.selfId, required this.selfName});
 
   Future<void> start() async {
+    if (_socket != null) return;
+
+    await _enableMulticastSupport();
+
     _socket = await RawDatagramSocket.bind(
       InternetAddress.anyIPv4,
       discoveryPort,
@@ -41,7 +49,7 @@ class DiscoveryService {
       'Discovery service started on port $discoveryPort, self=$selfName',
     );
 
-    _broadcastPresence();
+    await _broadcastPresence();
 
     _broadcastTimer = Timer.periodic(
       const Duration(seconds: 3),
@@ -56,10 +64,8 @@ class DiscoveryService {
 
   void _handleSocketEvent(RawSocketEvent event) {
     if (event != RawSocketEvent.read) return;
-
     final datagram = _socket?.receive();
     if (datagram == null) return;
-
     _readPresencePacket(datagram);
   }
 
@@ -67,8 +73,7 @@ class DiscoveryService {
     try {
       final text = utf8.decode(datagram.data);
       final map = jsonDecode(text);
-
-      if (map is! Map<String, dynamic>) return;
+      if (map is! Map) return;
       if (map['type'] != 'presence') return;
 
       final deviceId = map['id'] as String? ?? '';
@@ -112,17 +117,18 @@ class DiscoveryService {
   }
 
   Future<void> _broadcastPresence() async {
-    final localIp = await _findLocalIpv4();
-    if (localIp == null) {
+    final localIps = await _findLocalIpv4Addresses();
+    if (localIps.isEmpty) {
       await LogService.instance.warn('Local IPv4 not found');
       return;
     }
 
-    final packet = {
+    final packet = <String, dynamic>{
       'type': 'presence',
       'id': selfId,
       'name': selfName,
-      'ip': localIp,
+      'ip': localIps.first,
+      'ips': localIps,
       'textPort': textPort,
       'filePort': filePort,
       'reply': false,
@@ -130,12 +136,17 @@ class DiscoveryService {
     };
 
     final bytes = utf8.encode(jsonEncode(packet));
+    final Set<String> targets = <String>{'255.255.255.255'};
 
-    _socket?.send(bytes, InternetAddress('255.255.255.255'), discoveryPort);
+    for (final ip in localIps) {
+      final subnetBroadcast = _guessSubnetBroadcast(ip);
+      if (subnetBroadcast != null) {
+        targets.add(subnetBroadcast);
+      }
+    }
 
-    final subnetBroadcast = _guessSubnetBroadcast(localIp);
-    if (subnetBroadcast != null) {
-      _socket?.send(bytes, InternetAddress(subnetBroadcast), discoveryPort);
+    for (final target in targets) {
+      _socket?.send(bytes, InternetAddress(target), discoveryPort);
     }
   }
 
@@ -143,14 +154,15 @@ class DiscoveryService {
     InternetAddress address, {
     required bool reply,
   }) async {
-    final localIp = await _findLocalIpv4();
-    if (localIp == null) return;
+    final localIps = await _findLocalIpv4Addresses();
+    if (localIps.isEmpty) return;
 
-    final packet = {
+    final packet = <String, dynamic>{
       'type': 'presence',
       'id': selfId,
       'name': selfName,
-      'ip': localIp,
+      'ip': localIps.first,
+      'ips': localIps,
       'textPort': textPort,
       'filePort': filePort,
       'reply': reply,
@@ -167,36 +179,58 @@ class DiscoveryService {
     return '${parts[0]}.${parts[1]}.${parts[2]}.255';
   }
 
-  Future<String?> _findLocalIpv4() async {
+  Future<List<String>> _findLocalIpv4Addresses() async {
     try {
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
         includeLoopback: false,
       );
 
+      final List<String> preferred = <String>[];
+      final List<String> fallback = <String>[];
+
       for (final interface in interfaces) {
+        final interfaceName = interface.name.toLowerCase();
+        final looksVirtual =
+            interfaceName.contains('virtual') ||
+            interfaceName.contains('vmware') ||
+            interfaceName.contains('vbox') ||
+            interfaceName.contains('hyper-v') ||
+            interfaceName.contains('vethernet') ||
+            interfaceName.contains('vpn') ||
+            interfaceName.contains('loopback') ||
+            interfaceName.contains('bluetooth');
+
         for (final addr in interface.addresses) {
           final ip = addr.address;
-          if (!ip.startsWith('127.')) {
-            return ip;
+
+          if (ip.startsWith('127.') || ip.startsWith('169.254.')) {
+            continue;
+          }
+
+          if (looksVirtual) {
+            fallback.add(ip);
+          } else {
+            preferred.add(ip);
           }
         }
       }
+
+      final merged = <String>{...preferred, ...fallback}.toList();
+      return merged;
     } catch (_) {
-      return null;
+      return <String>[];
     }
-    return null;
   }
 
   Future<void> _cleanupOfflineDevices() async {
     final now = DateTime.now();
-    final toRemove = <String>[];
+    final List<String> toRemove = <String>[];
 
     for (final entry in _devices.entries) {
       if (entry.value.isManual) continue;
-
       final diff = now.difference(entry.value.lastSeen).inSeconds;
-      if (diff > 10) {
+      if (diff > 18) {
         toRemove.add(entry.key);
       }
     }
@@ -216,8 +250,7 @@ class DiscoveryService {
   void updateDeviceSelection(String deviceId, bool selected) {
     final old = _devices[deviceId];
     if (old == null) return;
-
-    _devices[deviceId] = old.copyWith(selected: selected);
+    _devices[deviceId] = old.copyWith(selected: selected, online: true);
     _emitDevices();
   }
 
@@ -229,7 +262,6 @@ class DiscoveryService {
   }) {
     final id = 'manual-$ip-$textPort-$filePort';
     final old = _devices[id];
-
     _devices[id] = Device(
       id: id,
       name: name,
@@ -241,7 +273,6 @@ class DiscoveryService {
       online: true,
       lastSeen: DateTime.now(),
     );
-
     _emitDevices();
     LogService.instance.info(
       'Manual device added: $name ($ip, text=$textPort, file=$filePort)',
@@ -255,7 +286,6 @@ class DiscoveryService {
     required int filePort,
   }) {
     String? matchedKey;
-
     for (final entry in _devices.entries) {
       if (entry.value.ip == ip) {
         matchedKey = entry.key;
@@ -301,10 +331,32 @@ class DiscoveryService {
     _devicesController.add(currentDevices());
   }
 
+  Future<void> _enableMulticastSupport() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _networkChannel.invokeMethod<void>('acquireMulticastLock');
+      await LogService.instance.info('Android multicast lock acquired');
+    } catch (e) {
+      await LogService.instance.warn('Acquire multicast lock failed: $e');
+    }
+  }
+
+  Future<void> _disableMulticastSupport() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _networkChannel.invokeMethod<void>('releaseMulticastLock');
+      await LogService.instance.info('Android multicast lock released');
+    } catch (e) {
+      await LogService.instance.warn('Release multicast lock failed: $e');
+    }
+  }
+
   Future<void> dispose() async {
     _broadcastTimer?.cancel();
     _cleanupTimer?.cancel();
     _socket?.close();
+    _socket = null;
+    await _disableMulticastSupport();
     await _devicesController.close();
   }
 }

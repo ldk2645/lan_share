@@ -107,6 +107,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
 
     _fileSub = _fileTransferService.receivedFileStream.listen((file) {
+      _discoveryService.rememberPeer(
+        name: file.fromDeviceName,
+        ip: file.fromIp,
+        textPort: file.fromTextPort,
+        filePort: file.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
         _receivedFiles = <ReceivedFileRecord>[file, ..._receivedFiles];
@@ -114,6 +121,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     });
 
     _folderSub = _fileTransferService.receivedFolderStream.listen((folder) {
+      _discoveryService.rememberPeer(
+        name: folder.fromDeviceName,
+        ip: folder.fromIp,
+        textPort: folder.fromTextPort,
+        filePort: folder.fromFilePort,
+      );
+
       if (!mounted) return;
       setState(() {
         _receivedFolders = <ReceivedFolderRecord>[folder, ..._receivedFolders];
@@ -194,6 +208,12 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
   String _buildDesktopName() {
     final name = Platform.localHostname.trim();
     if (name.isEmpty) {
+      if (Platform.isLinux) {
+        return 'Linux Device';
+      }
+      if (Platform.isMacOS) {
+        return 'macOS Device';
+      }
       return 'Windows Device';
     }
     return name;
@@ -294,7 +314,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
     }
 
     final result = await FilePicker.platform.pickFiles(
-      allowMultiple: false,
+      allowMultiple: true,
       withData: false,
       withReadStream: false,
       lockParentWindow: true,
@@ -305,33 +325,42 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
       return;
     }
 
-    final picked = result.files.first;
-    final path = picked.path;
+    final files = <File>[];
+    for (final picked in result.files) {
+      final path = picked.path;
+      if (path == null || path.isEmpty) {
+        continue;
+      }
+      files.add(File(path));
+    }
 
-    if (path == null || path.isEmpty) {
+    if (files.isEmpty) {
       _showMessage('Cannot read picked file path');
-      await LogService.instance.error('Picked file path is empty');
+      await LogService.instance.error('All picked file paths are empty');
       return;
     }
 
-    final file = File(path);
-    final fileName = file.uri.pathSegments.last;
-    final fileSize = await file.length();
+    int totalBytes = 0;
+    for (final file in files) {
+      totalBytes += await file.length();
+    }
 
     final task = TransferTask(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      title: fileName,
+      title: files.length == 1
+          ? files.first.uri.pathSegments.last
+          : '${files.length} files',
       targetDeviceNames: selectedDevices.map((e) => e.name).toList(),
       progress: 0.1,
-      status: 'Sending file...',
+      status: files.length == 1 ? 'Sending file...' : 'Sending files...',
     );
 
     setState(() {
       _tasks.insert(0, task);
     });
 
-    await _fileTransferService.sendFileToDevices(
-      file: file,
+    await _fileTransferService.sendFilesToDevices(
+      files: files,
       fromName: _buildDesktopName(),
       fromIp: _localIp,
       devices: selectedDevices,
@@ -339,10 +368,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
 
     setState(() {
       task.progress = 1;
-      task.status = 'File sent (${fileSize} bytes)';
+      task.status =
+          '${files.length} file(s) sent (${totalBytes} bytes)';
     });
 
-    _showMessage('File sent');
+    _showMessage(
+      files.length == 1 ? 'File sent' : '${files.length} files sent',
+    );
   }
 
   Future<void> _pickAndSendFolder() async {
@@ -644,11 +676,6 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
 
   Widget _buildSavePathCard() {
     final isDefault = SaveLocationService.instance.useDefaultPath;
-    final custom = SaveLocationService.instance.customBasePath;
-
-    final shownPath = isDefault
-        ? '${Directory.current.path}${Platform.pathSeparator}Received'
-        : (custom ?? 'Not selected');
 
     return _buildCard(
       child: Column(
@@ -664,9 +691,15 @@ class _DesktopHomePageState extends State<DesktopHomePage> {
             style: const TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 6),
-          SelectableText(
-            shownPath,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          FutureBuilder<String>(
+            future: SaveLocationService.instance.previewBaseReceivePath(),
+            builder: (context, snapshot) {
+              final shownPath = snapshot.data ?? 'Loading...';
+              return SelectableText(
+                shownPath,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              );
+            },
           ),
           const SizedBox(height: 10),
           Wrap(
